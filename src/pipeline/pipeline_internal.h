@@ -486,4 +486,11 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
 const char *cbm_pipeline_repo_path(const cbm_pipeline_t *p);
 atomic_int *cbm_pipeline_cancelled_ptr(cbm_pipeline_t *p);
 
+/* Parse a gRPC stub call "<service-stub>.<method>" into the canonical proto
+ * service name + method. Returns true ONLY when a recognized gRPC stub/client
+ * suffix is present (the stub-type signal that gates Route emission, #294).
+ * Exposed for testing. */
+bool extract_grpc_service_method(const char *callee, char *service, size_t srv_sz, char *method,
+                                 size_t meth_sz);
+
 #endif /* CBM_PIPELINE_INTERNAL_H */
