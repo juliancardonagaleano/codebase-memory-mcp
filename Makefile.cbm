@@ -275,6 +275,7 @@ TEST_FOUNDATION_SRCS = \
 
 TEST_EXTRACTION_SRCS = \
     tests/test_extraction.c \
+    tests/test_grammar_regression.c \
     tests/test_ac.c
 
 TEST_STORE_SRCS = \

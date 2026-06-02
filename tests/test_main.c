@@ -20,6 +20,7 @@ extern void suite_log(void);
 extern void suite_str_util(void);
 extern void suite_platform(void);
 extern void suite_extraction(void);
+extern void suite_grammar_regression(void);
 extern void suite_ac(void);
 extern void suite_store_nodes(void);
 extern void suite_store_edges(void);
@@ -90,6 +91,7 @@ int main(void) {
     /* Existing C code regression tests */
     RUN_SUITE(ac);
     RUN_SUITE(extraction);
+    RUN_SUITE(grammar_regression);
 
     /* Store (M5) */
     RUN_SUITE(store_nodes);
