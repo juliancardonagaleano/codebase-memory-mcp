@@ -306,8 +306,13 @@ NX_OK=$(echo "$CYPHER_NX" | python3 -c "import json,sys; d=json.loads(sys.stdin.
 CASEV=$(cyp_first_cell 'MATCH (f:Function) RETURN CASE WHEN f.name =~ ".+" THEN "named" ELSE "anon" END AS c LIMIT 1')
 [ "$CASEV" = "named" ] && echo "OK: query_graph CASE expression = $CASEV" || { echo "FAIL: CASE returned '$CASEV'"; exit 1; }
 
-# unsupported function must FAIL LOUDLY (not silently return empty)
-ERROUT=$(cli query_graph "{\"project\":\"$PROJECT\",\"query\":\"MATCH (f:Function) RETURN nosuchfn(f.name)\"}" 2>&1 || true)
+# unsupported function must FAIL LOUDLY (not silently return empty). The CLI
+# prints the parse error to stderr (captured by cli() into $CLI_STDERR) and exits
+# non-zero, leaving stdout empty — so verify the loud failure on that channel.
+if cli query_graph "{\"project\":\"$PROJECT\",\"query\":\"MATCH (f:Function) RETURN nosuchfn(f.name)\"}" >/dev/null; then
+  echo "FAIL: unsupported function did not error (exit 0)"; exit 1
+fi
+ERROUT=$(cat "$CLI_STDERR" 2>/dev/null)
 case "$ERROUT" in
   *unsupported*) echo "OK: unsupported function errors loudly" ;;
   *) echo "FAIL: unsupported function did not error: $ERROUT" | head -c 300; exit 1 ;;
