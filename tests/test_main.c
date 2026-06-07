@@ -86,6 +86,9 @@ extern void suite_edge_types_probe(void);
 extern void suite_convergence_probe(void);
 extern void suite_matrix_known_classes(void);
 extern void suite_matrix_new_constructs(void);
+extern void suite_grammar_probe_a(void);
+extern void suite_grammar_probe_b(void);
+extern void suite_grammar_probe_c(void);
 extern void suite_incremental(void);
 extern void suite_simhash(void);
 extern void suite_stack_overflow(void);
@@ -229,6 +232,9 @@ int main(void) {
     RUN_SUITE(convergence_probe);
     RUN_SUITE(matrix_known_classes);
     RUN_SUITE(matrix_new_constructs);
+    RUN_SUITE(grammar_probe_a);
+    RUN_SUITE(grammar_probe_b);
+    RUN_SUITE(grammar_probe_c);
 
     RUN_SUITE(incremental);
 
