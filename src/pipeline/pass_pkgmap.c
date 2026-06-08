@@ -1261,6 +1261,73 @@ static bool import_targetable_label(const char *label) {
     return false;
 }
 
+/* Resolve a sibling-file import: a bare path/name (no leading "./") that names
+ * a file relative to the importer's directory.  This covers build/markup
+ * grammars whose import string is a sibling filename or directory rather than a
+ * dotted module path:
+ *   - SCSS  `@use 'vars'`              → sibling `_vars.scss` (partial underscore)
+ *   - Just  `import 'common.just'`     → sibling `common.just`
+ *   - BitBake `require mypackage.inc`  → sibling `mypackage.inc`
+ *   - Meson `subdir('lib')`            → `lib/meson.build`
+ *   - func  `#include "utils.fc"`      → sibling `utils.fc`
+ *   - Pony  `use "util"`               → sibling `util.pony`
+ * Builds a path relative to source_rel's directory, then looks up the resulting
+ * File/Module-node QN (extension is stripped by fqn_module).  Returns a borrowed
+ * node or NULL.  Several filename conventions are tried in turn. */
+static const cbm_gbuf_node_t *resolve_sibling_file(const cbm_pipeline_ctx_t *ctx,
+                                                    const char *source_rel, const char *source_file_qn,
+                                                    const char *module_path) {
+    if (!module_path || !module_path[0]) {
+        return NULL;
+    }
+    /* Directory of the importing file (empty for repo-root files). */
+    char *dir = path_dirname(source_rel ? source_rel : "");
+    if (!dir) {
+        return NULL;
+    }
+
+    /* Candidate relative paths, in priority order. */
+    char cands[4][PKGMAP_PATH_BUF];
+    int ncand = 0;
+    const char *base = module_path;
+    /* Skip a leading "./". */
+    if (base[0] == '.' && base[1] == '/') {
+        base += 2;
+    }
+    /* 1. Direct sibling: dir/<module_path>. */
+    snprintf(cands[ncand++], PKGMAP_PATH_BUF, "%s%s%s", dir, dir[0] ? "/" : "", base);
+    /* 2. SCSS partial: dir/[subdir/]_<basename>.scss (underscore-prefixed). */
+    {
+        const char *slash = strrchr(base, '/');
+        const char *bn = slash ? slash + 1 : base;
+        char *dpart = slash ? cbm_strndup(base, (size_t)(slash - base)) : strdup("");
+        if (dpart && bn[0] != '_') {
+            snprintf(cands[ncand++], PKGMAP_PATH_BUF, "%s%s%s%s_%s.scss", dir, dir[0] ? "/" : "",
+                     dpart[0] ? dpart : "", dpart[0] ? "/" : "", bn);
+        }
+        free(dpart);
+    }
+    /* 3. Meson subdir: dir/<module_path>/meson.build. */
+    snprintf(cands[ncand++], PKGMAP_PATH_BUF, "%s%s%s/meson.build", dir, dir[0] ? "/" : "", base);
+
+    const cbm_gbuf_node_t *found = NULL;
+    for (int i = 0; i < ncand; i++) {
+        char *qn = cbm_pipeline_fqn_module(ctx->project_name, cands[i]);
+        if (!qn) {
+            continue;
+        }
+        const cbm_gbuf_node_t *n = cbm_gbuf_find_by_qn(ctx->gbuf, qn);
+        free(qn);
+        if (n && (!source_file_qn || !n->qualified_name ||
+                  strcmp(n->qualified_name, source_file_qn) != 0)) {
+            found = n;
+            break;
+        }
+    }
+    free(dir);
+    return found;
+}
+
 const cbm_gbuf_node_t *cbm_pipeline_resolve_import_node(const cbm_pipeline_ctx_t *ctx,
                                                         const char *source_rel,
                                                         const char *source_file_qn,
@@ -1276,6 +1343,17 @@ const cbm_gbuf_node_t *cbm_pipeline_resolve_import_node(const cbm_pipeline_ctx_t
     free(target_qn);
     if (target) {
         return target;
+    }
+
+    /* Strategy 1b: sibling-file resolution for build/markup grammars whose
+     * import string is a sibling filename or directory (SCSS partials, Just/
+     * BitBake/func includes, Meson subdir, Pony use). */
+    {
+        const cbm_gbuf_node_t *sib =
+            resolve_sibling_file(ctx, source_rel, source_file_qn, imp->module_path);
+        if (sib) {
+            return sib;
+        }
     }
 
     /* Strategy 2: namespace map.  `using App.Utils`, `import com.example.Foo`,

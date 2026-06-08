@@ -923,7 +923,10 @@ static void generic_import_from_text(CBMExtractCtx *ctx, TSNode node) {
     if (len > 0 && text[len - SKIP_ONE] == ';') {
         text[len - SKIP_ONE] = '\0';
     }
-    if (text[0]) {
+    /* Strip surrounding quotes (Pony `use "util"`, func `#include "utils.fc"`)
+     * so the module path is a clean filename the resolver can match. */
+    text = strip_quotes(a, text);
+    if (text && text[0]) {
         CBMImport imp = {.local_name = path_last(a, text), .module_path = text};
         cbm_imports_push(&ctx->result->imports, a, imp);
     }
@@ -1627,9 +1630,16 @@ static void lisp_push_module(CBMExtractCtx *ctx, TSNode mod_node) {
     CBMArena *a = ctx->arena;
     const char *mk = ts_node_type(mod_node);
     char *mod = NULL;
-    if (strcmp(mk, "symbol") == 0 || strcmp(mk, "string") == 0) {
+    if (strcmp(mk, "symbol") == 0 || strcmp(mk, "string") == 0 || strcmp(mk, "sym_lit") == 0 ||
+        strcmp(mk, "str_lit") == 0 || strcmp(mk, "kwd_lit") == 0) {
         mod = strip_quotes(a, cbm_node_text(a, mod_node, ctx->source));
-    } else if (strcmp(mk, "list") == 0) {
+        /* Clojure/Fennel keyword module refs carry a leading ':' (e.g. `:util`,
+         * `(require :util)`); strip it so the name matches the sibling file. */
+        if (mod && mod[0] == ':') {
+            mod = cbm_arena_strdup(a, mod + 1);
+        }
+    } else if (strcmp(mk, "list") == 0 || strcmp(mk, "list_lit") == 0 ||
+               strcmp(mk, "vec_lit") == 0) {
         /* (only-in racket/math pi) → take first symbol after a leading keyword,
          * else join inner symbols with '/'. Simplest robust choice: the whole
          * list text minus the parens. */
@@ -1656,7 +1666,10 @@ static void parse_lisp_imports(CBMExtractCtx *ctx) {
     }
     do {
         TSNode node = ts_tree_cursor_current_node(&cursor);
-        if (strcmp(ts_node_type(node), "list") != 0) {
+        const char *nt = ts_node_type(node);
+        /* Different lisp grammars name the s-expression list node differently:
+         * Scheme/Racket/CL/elisp use "list"; Clojure uses "list_lit". */
+        if (strcmp(nt, "list") != 0 && strcmp(nt, "list_lit") != 0) {
             continue;
         }
         uint32_t nc = ts_node_named_child_count(node);
@@ -1664,7 +1677,9 @@ static void parse_lisp_imports(CBMExtractCtx *ctx) {
             continue;
         }
         TSNode head = ts_node_named_child(node, 0);
-        if (strcmp(ts_node_type(head), "symbol") != 0) {
+        const char *ht = ts_node_type(head);
+        /* Clojure tokenizes the head symbol as "sym_lit"; others as "symbol". */
+        if (strcmp(ht, "symbol") != 0 && strcmp(ht, "sym_lit") != 0) {
             continue;
         }
         char *hn = cbm_node_text(a, head, ctx->source);
@@ -1677,7 +1692,8 @@ static void parse_lisp_imports(CBMExtractCtx *ctx) {
             TSNode mod_node = ts_node_named_child(node, j);
             const char *mk = ts_node_type(mod_node);
             /* (require 'json) — the quoted datum is a `quote` wrapping a symbol. */
-            if (strcmp(mk, "quote") == 0 && ts_node_named_child_count(mod_node) > 0) {
+            if ((strcmp(mk, "quote") == 0 || strcmp(mk, "quoting_lit") == 0) &&
+                ts_node_named_child_count(mod_node) > 0) {
                 lisp_push_module(ctx, ts_node_named_child(mod_node, 0));
             } else {
                 lisp_push_module(ctx, mod_node);
@@ -2014,6 +2030,42 @@ static void parse_bitbake_imports(CBMExtractCtx *ctx) {
             push_string_descendant_import(ctx, node);
         }
         ts_nstack_push_children(&stack, ctx->arena, node);
+    }
+}
+
+// --- Meson imports: subdir('name') → descend into name/meson.build ---
+// Meson's subdir() includes a child directory's meson.build into the build.
+// The grammar models a call as `function_expression` (id + argument_list).
+// Find subdir() calls and push the directory name as the module path; the
+// pipeline resolver maps "name" → "name/meson.build".
+static void parse_meson_imports(CBMExtractCtx *ctx) {
+    CBMArena *a = ctx->arena;
+    TSNodeStack stack;
+    ts_nstack_init(&stack, a, CBM_SZ_512);
+    ts_nstack_push(&stack, a, ctx->root);
+    while (stack.count > 0) {
+        TSNode node = ts_nstack_pop(&stack);
+        const char *k = ts_node_type(node);
+        /* tree-sitter-meson models a call as `normal_command` (identifier +
+         * arguments) and string arguments as `string`. */
+        if (strcmp(k, "normal_command") == 0) {
+            uint32_t nc = ts_node_named_child_count(node);
+            if (nc >= 1) {
+                TSNode fn = ts_node_named_child(node, 0);
+                char *fname = cbm_node_text(a, fn, ctx->source);
+                if (fname && strcmp(fname, "subdir") == 0) {
+                    TSNode str = node;
+                    if (find_first_descendant_of(node, "string", &str)) {
+                        char *path = strip_quotes(a, cbm_node_text(a, str, ctx->source));
+                        if (path && path[0]) {
+                            CBMImport imp = {.local_name = path_last(a, path), .module_path = path};
+                            cbm_imports_push(&ctx->result->imports, a, imp);
+                        }
+                    }
+                }
+            }
+        }
+        ts_nstack_push_children(&stack, a, node);
     }
 }
 
@@ -2412,6 +2464,9 @@ void cbm_extract_imports(CBMExtractCtx *ctx) {
         break;
     case CBM_LANG_SCHEME:
     case CBM_LANG_RACKET:
+    case CBM_LANG_EMACSLISP:
+    case CBM_LANG_FENNEL:
+    case CBM_LANG_COMMONLISP:
         parse_lisp_imports(ctx);
         break;
     case CBM_LANG_STARLARK:
@@ -2440,6 +2495,9 @@ void cbm_extract_imports(CBMExtractCtx *ctx) {
         break;
     case CBM_LANG_JUST:
         parse_just_imports(ctx);
+        break;
+    case CBM_LANG_MESON:
+        parse_meson_imports(ctx);
         break;
     case CBM_LANG_NIX:
         parse_nix_imports(ctx);

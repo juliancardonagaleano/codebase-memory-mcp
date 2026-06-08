@@ -255,6 +255,7 @@ static const ext_entry_t EXT_TABLE[] = {
     {"justfile", CBM_LANG_JUST},
     {"Justfile", CBM_LANG_JUST},
     {".justfile", CBM_LANG_JUST},
+    {".just", CBM_LANG_JUST}, /* `import 'common.just'` target files */
     {"hyprland.conf", CBM_LANG_HYPRLANG},
     {"ssh_config", CBM_LANG_SSHCONFIG},
     {"sshd_config", CBM_LANG_SSHCONFIG},
@@ -262,6 +263,9 @@ static const ext_entry_t EXT_TABLE[] = {
     {"BUILD.bazel", CBM_LANG_STARLARK},
     {"WORKSPACE", CBM_LANG_STARLARK},
     {"WORKSPACE.bazel", CBM_LANG_STARLARK},
+
+    /* BitBake include fragments — `require/include foo.inc` target files. */
+    {".inc", CBM_LANG_BITBAKE},
 
     /* Vue */
     {".vue", CBM_LANG_VUE},
