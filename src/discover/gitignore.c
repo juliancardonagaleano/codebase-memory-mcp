@@ -340,16 +340,16 @@ static bool match_unrooted(const char *pattern, const char *rel_path, const char
     return false;
 }
 
-bool cbm_gitignore_matches(const cbm_gitignore_t *gi, const char *rel_path, bool is_dir) {
+int cbm_gitignore_match_result(const cbm_gitignore_t *gi, const char *rel_path, bool is_dir) {
     if (!gi || !rel_path) {
-        return false;
+        return 0;
     }
 
     /* Extract the basename for non-rooted pattern matching */
     const char *basename = strrchr(rel_path, '/');
     basename = basename ? basename + SKIP_ONE : rel_path;
 
-    bool matched = false;
+    int matched = 0;
 
     for (int i = 0; i < gi->count; i++) {
         const gi_pattern_t *p = &gi->patterns[i];
@@ -362,11 +362,15 @@ bool cbm_gitignore_matches(const cbm_gitignore_t *gi, const char *rel_path, bool
                                     : match_unrooted(p->pattern, rel_path, basename);
 
         if (this_match) {
-            matched = !p->negated;
+            matched = p->negated ? -1 : 1;
         }
     }
 
     return matched;
+}
+
+bool cbm_gitignore_matches(const cbm_gitignore_t *gi, const char *rel_path, bool is_dir) {
+    return cbm_gitignore_match_result(gi, rel_path, is_dir) > 0;
 }
 
 void cbm_gitignore_free(cbm_gitignore_t *gi) {
