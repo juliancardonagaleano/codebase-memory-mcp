@@ -1873,7 +1873,11 @@ void handle_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, Walk
 
     if (cbm_kind_in_set(node, spec->call_node_types)) {
         char *callee = extract_callee_name(ctx->arena, node, ctx->source, ctx->language);
-        if (callee && callee[0] && !cbm_is_keyword(callee, ctx->language)) {
+        // Keyword-filter callees, but keep builtins we mint a node for (len, str,
+        // ...) so the LSP-resolved builtin call still forms a CALLS edge.
+        if (callee && callee[0] &&
+            (!cbm_is_keyword(callee, ctx->language) ||
+             cbm_is_resolvable_builtin(callee, ctx->language))) {
             CBMCall call = {0};
             call.callee_name = callee;
             call.enclosing_func_qn = state->enclosing_func_qn;

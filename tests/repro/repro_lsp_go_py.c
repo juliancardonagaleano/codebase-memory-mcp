@@ -571,23 +571,14 @@ TEST(repro_lsp_py_operator_dunder) {
 }
 
 TEST(repro_lsp_py_builtin) {
-    /* PARKED for release: lsp_builtin (len(v)) needs a typeshed/builtins registry
-     * so builtin functions have target nodes; without it the resolution has no
-     * node to form a CALLS edge to (callable=0). Tracked for a future builtins
-     * registry. */
-    printf("  %sSKIP%s parked: needs builtins/typeshed registry (len has no node)\n", tf_dim(),
-           tf_reset());
-    return -1; /* skip — not counted as pass or fail */
+    /* len(v) resolves to the injected builtins.len node (py_builtins.c) and
+     * emits lsp_builtin with a real CALLS edge. */
     return assert_lsp_strategy("main.py", kPyBuiltin, "lsp_builtin");
 }
 
 TEST(repro_lsp_py_builtin_constructor) {
-    /* PARKED for release: lsp_builtin_constructor (str(v)) needs a builtins/
-     * typeshed registry so the builtin type str has a node to target. Tracked
-     * for a future builtins registry. */
-    printf("  %sSKIP%s parked: needs builtins/typeshed registry (str type has no node)\n", tf_dim(),
-           tf_reset());
-    return -1; /* skip — not counted as pass or fail */
+    /* str(v) resolves to the injected builtins.str type node (py_builtins.c)
+     * and emits lsp_builtin_constructor with a real CALLS edge. */
     return assert_lsp_strategy("main.py", kPyBuiltinConstructor,
                                "lsp_builtin_constructor");
 }

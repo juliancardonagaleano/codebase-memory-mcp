@@ -15,6 +15,14 @@ char *cbm_node_text(CBMArena *a, TSNode node, const char *source);
 // Check if a string is a language keyword (should be skipped as callee/usage).
 bool cbm_is_keyword(const char *name, CBMLanguage lang);
 
+// Check if a name is a builtin we mint a real graph node for, so a CALL to it
+// must NOT be keyword-filtered out of call extraction (the LSP resolves it to
+// the injected builtin node and forms a CALLS edge). Narrower than
+// cbm_is_keyword: it only covers builtins with a target node, so un-filtering
+// them cannot produce a node-less / Module-sourced edge. The Python set MUST
+// stay in sync with kPyBuiltinNodes in internal/cbm/lsp/py_builtins.c.
+bool cbm_is_resolvable_builtin(const char *name, CBMLanguage lang);
+
 // Classify a string literal as URL, config, or neither.
 // Returns CBM_STRREF_URL (0), CBM_STRREF_CONFIG (1), or -1 for neither.
 int cbm_classify_string(const char *str, int len);

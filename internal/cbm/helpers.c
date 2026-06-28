@@ -210,6 +210,29 @@ bool cbm_is_keyword(const char *name, CBMLanguage lang) {
     return false;
 }
 
+// Builtins that appear in the keyword set above (so they are suppressed as bare
+// usages) but for which we mint a real graph node and an LSP resolution, so a
+// CALL to them must still be extracted. MUST stay in sync with kPyBuiltinNodes
+// in internal/cbm/lsp/py_builtins.c — every entry here has a "builtins.<name>"
+// node, so the resulting CALLS edge always has a target (never Module-sourced).
+static const char *python_resolvable_builtins[] = {"len",  "print", "str",   "int",
+                                                   "list", "dict",  "range", NULL};
+
+bool cbm_is_resolvable_builtin(const char *name, CBMLanguage lang) {
+    if (!name || !name[0]) {
+        return false;
+    }
+    if (lang != CBM_LANG_PYTHON) {
+        return false;
+    }
+    for (const char **b = python_resolvable_builtins; *b; b++) {
+        if (strcmp(name, *b) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // --- Export detection ---
 
 bool cbm_is_exported(const char *name, CBMLanguage lang) {
