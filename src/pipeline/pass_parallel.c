@@ -675,7 +675,13 @@ static void extract_worker(int worker_id, void *ctx_ptr) {
          * single-threaded recovery run instead takes the sequential path
          * (pass_definitions.c), and cbm_extract_file's hard guard backstops both. */
         if (cbm_index_is_quarantined(fi->rel_path)) {
-            pp_err_add(errs, fi->rel_path, "quarantined after crash", "crash");
+            const char *phase = cbm_index_quarantine_phase(fi->rel_path);
+            if (!phase) {
+                phase = "crash";
+            }
+            const char *reason =
+                (strcmp(phase, "hang") == 0) ? "quarantined after hang" : "quarantined after crash";
+            pp_err_add(errs, fi->rel_path, reason, phase);
             ws->errors++;
             continue;
         }

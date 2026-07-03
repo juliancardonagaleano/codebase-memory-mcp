@@ -95,19 +95,31 @@ run_bounded() {
     fi
     local of; of="$SCRATCH/rb_out.$$"
     if [ -n "$tobin" ]; then
-        "$tobin" "$secs" "$@" >"$of" 2>&1
+        # -s KILL: force-kill at the deadline. The binary catches SIGTERM for a
+        # graceful shutdown, so a busy-spin (e.g. a stuck external scanner) would
+        # survive plain `timeout`'s TERM and hang the runner forever. timeout still
+        # exits 124 on the deadline regardless of the signal used.
+        "$tobin" -s KILL "$secs" "$@" >"$of" 2>&1
         RB_RC=$?
     else
-        # Fallback: background the command, bound the wait via a done-fifo.
+        # Fallback (no timeout/gtimeout): background the command, bound the wait via
+        # a done-fifo. Open the fifo read-WRITE (exec 9<>) so the open never blocks
+        # waiting for a writer — a truly-hanging command never opens the write end,
+        # and a blocking open would defeat `read -t`. On the deadline, force-kill
+        # the whole command subtree with SIGKILL (children first so no orphan spins
+        # on): SIGTERM is caught by the binary and cannot stop a busy-spin.
         local done; done="$SCRATCH/rb_done.$$"
         rm -f "$done"; mkfifo "$done" 2>/dev/null || done=""
         ( "$@" >"$of" 2>&1; echo $? > "$SCRATCH/rb_rc.$$"; [ -n "$done" ] && echo done > "$done" ) &
         local bgpid=$!
         if [ -n "$done" ]; then
+            exec 9<>"$done"
             local sig=""
-            read -t "$secs" sig < "$done"
+            read -t "$secs" sig <&9
+            exec 9<&-
             if [ -z "$sig" ]; then
-                kill "$bgpid" 2>/dev/null || true
+                pkill -9 -P "$bgpid" 2>/dev/null || true
+                kill -9 "$bgpid" 2>/dev/null || true
                 RB_RC=124            # mimic timeout's exit code
             else
                 RB_RC="$(cat "$SCRATCH/rb_rc.$$" 2>/dev/null || echo 1)"
@@ -769,6 +781,76 @@ print(max((int(x) for x in m), default=0))' 2>/dev/null)"
     fi
 }
 
+# ── Invariant: a HANG on one file is SKIPPED and the rest is indexed ─────────
+# The hang twin of inv_crasher_skipped_cli. A file that makes the indexer make NO
+# progress (external-scanner infinite loop, modelled by CBM_TEST_HANG_ON's busy-
+# spin) must be QUARANTINED: the supervisor's quiet-timeout kills the worker,
+# classifies it as a HANG, pins the exact file via the marker, quarantines it as
+# phase="hang", and re-spawns until a clean run indexes the GOOD files while
+# reporting the hanger as a phase="hang" skip. Honest guard: with the supervisor
+# OFF the injected hang must genuinely NOT complete within a bound (rc=124, the
+# vacuity guard — proving the injector really hangs); with it ON + a SHORT
+# CBM_INDEX_WORKER_TIMEOUT_S the run must COMPLETE (rc<128, not 124), report
+# status="indexed" + the hanger as phase="hang", index the good file (nodes>0),
+# and NOT skip the good file.
+inv_hanger_skipped_cli() {
+    local hrepo="$SCRATCH/hanger_repo"
+    mkdir -p "$hrepo"
+    printf 'def good():\n    return 1\n' > "$hrepo/good.py"
+    printf 'def slow():\n    return 2\n' > "$hrepo/hang_me.py"
+    git -C "$hrepo" init -q 2>/dev/null || true
+    local hn; hn="$(native_path "$hrepo")"
+
+    # Honesty baseline: supervisor OFF → the injected hang must NOT complete within
+    # the bound. The bounded runner fires (rc=124), proving the injector hangs.
+    export CBM_TEST_HANG_ON=hang_me
+    export CBM_INDEX_SUPERVISOR=0
+    cli_call 12 index_repository "{\"repo_path\":\"$hn\"}"
+    local base_rc="$CLI_RC"
+    unset CBM_INDEX_SUPERVISOR
+
+    # Supervisor ON (default) + a SHORT no-progress timeout → the hang must be
+    # detected fast, contained, and skipped-and-continued. Recovery spends two
+    # ~5s timeouts (first parallel run, then the single-threaded recovery run) so
+    # this invariant legitimately takes ~10-15s; it MUST still complete.
+    export CBM_INDEX_WORKER_TIMEOUT_S=5
+    cli_call 90 index_repository "{\"repo_path\":\"$hn\"}"
+    local sup_rc="$CLI_RC"
+    local sup_out="$CLI_OUT"
+    unset CBM_INDEX_WORKER_TIMEOUT_S
+    unset CBM_TEST_HANG_ON
+
+    # Strip JSON escaping so the assertions are robust to the text-result wrapping.
+    local flat
+    flat="$(printf '%s' "$sup_out" | tr -d '\\' | tr -d '"')"
+    local nodes
+    nodes="$(printf '%s' "$sup_out" | "$PY" -c '
+import sys,re
+t=sys.stdin.read().replace("\\","").replace("\"","")
+m=re.findall(r"nodes\s*[:=]\s*(\d+)", t)
+print(max((int(x) for x in m), default=0))' 2>/dev/null)"
+
+    if [ "$base_rc" -ne 124 ]; then
+        fail "hanger-skipped-cli" "baseline did not hang (rc=$base_rc, want 124) — injector inactive, guard would be vacuous"
+    elif [ "$sup_rc" -eq 124 ]; then
+        fail "hanger-skipped-cli" "supervised run hung (rc=124) — hang not contained"
+    elif [ "$sup_rc" -gt 128 ]; then
+        fail "hanger-skipped-cli" "supervised run died via signal $((sup_rc-128))"
+    elif ! printf '%s' "$flat" | grep -q 'status:indexed'; then
+        fail "hanger-skipped-cli" "status not indexed after skip-and-continue: $(printf '%s' "$sup_out" | tr '\n' ' ' | cut -c1-300)"
+    elif ! printf '%s' "$flat" | grep -q 'phase:hang'; then
+        fail "hanger-skipped-cli" "hanger not reported as phase=hang: $(printf '%s' "$sup_out" | tr '\n' ' ' | cut -c1-300)"
+    elif ! printf '%s' "$flat" | grep -q 'hang_me.py'; then
+        fail "hanger-skipped-cli" "hang_me.py not listed as skipped: $(printf '%s' "$sup_out" | tr '\n' ' ' | cut -c1-300)"
+    elif printf '%s' "$flat" | grep -q 'good.py'; then
+        fail "hanger-skipped-cli" "good.py was skipped (should have been indexed): $(printf '%s' "$sup_out" | tr '\n' ' ' | cut -c1-300)"
+    elif [ "${nodes:-0}" -le 0 ] 2>/dev/null; then
+        fail "hanger-skipped-cli" "good file not indexed (nodes=${nodes:-0}): $(printf '%s' "$sup_out" | tr '\n' ' ' | cut -c1-300)"
+    else
+        pass "hanger-skipped-cli (baseline rc=$base_rc hung; supervised rc=$sup_rc: status=indexed, hang_me.py phase=hang, good.py indexed nodes=$nodes)"
+    fi
+}
+
 # ── Invariant 8: clean exit on stdin EOF within a bounded wait (no hang) ────
 # Close the server's stdin (fd3). The server must reach EOF, break its loop, and
 # exit cleanly. We bound the wait WITHOUT sleep: closing stdin makes the server
@@ -904,6 +986,7 @@ inv_nonexistent_repo_cli
 inv_empty_repo_cli
 inv_garbage_files_cli
 inv_crasher_skipped_cli
+inv_hanger_skipped_cli
 
 # MCP server-lifecycle invariants (one shared server instance).
 inv_mcp_initialize

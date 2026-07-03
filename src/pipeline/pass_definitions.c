@@ -523,7 +523,13 @@ int cbm_pipeline_pass_definitions(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t
          * re-crashing and without duplicating the skip. No-op unless
          * CBM_INDEX_QUARANTINE_FILE is set. */
         if (cbm_index_is_quarantined(rel)) {
-            cbm_pipeline_add_file_error(ctx->pipeline, rel, "quarantined after crash", "crash");
+            const char *phase = cbm_index_quarantine_phase(rel);
+            if (!phase) {
+                phase = "crash";
+            }
+            const char *reason =
+                (strcmp(phase, "hang") == 0) ? "quarantined after hang" : "quarantined after crash";
+            cbm_pipeline_add_file_error(ctx->pipeline, rel, reason, phase);
             errors++;
             continue;
         }

@@ -55,10 +55,14 @@ bool cbm_index_supervisor_should_wrap(void) {
 }
 
 /* Quiet-timeout (ms) for a supervised worker: killed + reported as a hang if it
- * emits no progress within the window. 0 => disabled. Full hang coverage (a
- * generous default + attribution) is wired in a later stage; for now honour the
- * env override and default to disabled so crash containment ships independently. */
+ * emits no NEW log line within the window. This is a NO-PROGRESS timeout — every
+ * completed log line the worker tails (per-batch parallel.extract.progress every
+ * 10 files, plus each pass boundary) resets it — NOT a total-time cap, so a large
+ * repo that keeps making progress is never falsely killed. Default: 15 min (a
+ * genuinely stuck file emits nothing, so this fires only on a real hang). The
+ * CBM_INDEX_WORKER_TIMEOUT_S override (seconds → ms) tightens it for tests. */
 static int worker_quiet_timeout_ms(void) {
+    enum { DEFAULT_QUIET_TIMEOUT_MS = 900000 }; /* 15 min with no progress */
     const char *e = getenv("CBM_INDEX_WORKER_TIMEOUT_S");
     if (e && e[0]) {
         long s = atol(e);
@@ -66,7 +70,7 @@ static int worker_quiet_timeout_ms(void) {
             return (int)(s * 1000);
         }
     }
-    return 0;
+    return DEFAULT_QUIET_TIMEOUT_MS;
 }
 
 /* Read an entire file into a heap string (NUL-terminated). NULL on error. */
@@ -129,6 +133,14 @@ int cbm_index_spawn_worker(const char *args_json, bool single_thread, const char
     worker_tmp_path(log_path, sizeof(log_path), pid, ".log");
     (void)remove(resp_path); /* clear any stale file */
 
+    /* No --progress: the worker's DEFAULT structured logging already provides the
+     * no-progress heartbeat (INFO parallel.extract.progress every 10 files + each
+     * pass boundary — all newline-terminated → tailed → reset the quiet-timeout).
+     * --progress would be strictly worse here: it installs a REPLACE-mode sink that
+     * suppresses those default lines and emits per-file extraction as a carriage-
+     * return in-place update (no trailing '\n'), which cbm_tail_log does not count
+     * as progress. (It would not corrupt the response either — that goes to the
+     * separate --response-out file, not stdout.) */
     const char *argv[8];
     int n = 0;
     argv[n++] = self;

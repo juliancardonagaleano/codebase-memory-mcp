@@ -561,11 +561,28 @@ static void cbm_quarantine_load(void) {
         if (len == 0) {
             continue;
         }
-        /* The table borrows key pointers, so dup each path. Intentionally never
-         * freed: the set lives for the whole (short-lived worker) process. */
+        /* Line format: "path\tphase" where phase is "crash" or "hang". A bare
+         * "path" line (no tab) is tolerated and defaults to phase "crash" for
+         * backward compatibility with older quarantine files. */
+        char *tab = strchr(line, '\t');
+        const char *phase = "crash";
+        if (tab) {
+            *tab = '\0';
+            if (tab[1]) {
+                phase = tab + 1;
+            }
+        }
+        if (line[0] == '\0') {
+            continue; /* empty path (line began with a tab) — skip */
+        }
+        /* The table borrows the key + value pointers, so dup both. Intentionally
+         * never freed: the set lives for the whole (short-lived worker) process.
+         * The value stores the phase so cbm_index_quarantine_phase() can report
+         * "crash" vs "hang"; membership (cbm_index_is_quarantined) is value != NULL. */
         char *key = cbm_strdup(line);
-        if (key) {
-            cbm_ht_set(set, key, (void *)(intptr_t)1);
+        char *pval = cbm_strdup(phase);
+        if (key && pval) {
+            cbm_ht_set(set, key, (void *)pval);
         }
     }
     (void)fclose(f);
@@ -591,6 +608,16 @@ bool cbm_index_is_quarantined(const char *rel_path) {
         }
     }
     return g_quarantine_set && cbm_ht_has(g_quarantine_set, rel_path);
+}
+
+const char *cbm_index_quarantine_phase(const char *rel_path) {
+    /* cbm_index_is_quarantined drives the lazy once-load and returns true only
+     * when the set is loaded and holds rel_path — so on true, g_quarantine_set is
+     * non-NULL and the stored value is the phase string ("crash"/"hang"). */
+    if (!cbm_index_is_quarantined(rel_path)) {
+        return NULL;
+    }
+    return (const char *)cbm_ht_get(g_quarantine_set, rel_path);
 }
 
 static void cbm_test_fault_inject(const char *rel_path) {

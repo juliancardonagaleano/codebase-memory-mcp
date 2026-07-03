@@ -3386,13 +3386,15 @@ static char *supervisor_read_marker(const char *path) {
     return len > 0 ? cbm_strdup(buf) : NULL;
 }
 
-/* Append one repo-relative path (newline-terminated) to the quarantine list. */
-static bool supervisor_append_quarantine(const char *path, const char *rel) {
+/* Append one quarantine entry "rel\tphase\n" (phase = "crash"|"hang") to the
+ * quarantine list. The worker's loader parses this back and reports the skip's
+ * phase in skipped[]; a bare "rel" line is still tolerated there (defaults crash). */
+static bool supervisor_append_quarantine(const char *path, const char *rel, const char *phase) {
     FILE *f = cbm_fopen(path, "ab");
     if (!f) {
         return false;
     }
-    (void)fprintf(f, "%s\n", rel);
+    (void)fprintf(f, "%s\t%s\n", rel, phase);
     (void)fclose(f);
     return true;
 }
@@ -3401,10 +3403,11 @@ static bool supervisor_append_quarantine(const char *path, const char *rel) {
  * (Stage 3c). Returns the response string (caller frees):
  *   - the worker's own response on a clean first run (the common path);
  *   - after a crash/hang, the response from a clean single-threaded RECOVERY run
- *     that quarantines the crashing file(s) — status="indexed" with the crashers
- *     listed in skipped[] as phase="crash", and the good files indexed;
- *   - a contained-failure response if recovery cannot converge (cap exhausted or
- *     an unattributable crash).
+ *     that quarantines the culprit file(s) — status="indexed" with them listed in
+ *     skipped[] as phase="crash"/"hang", and the good files indexed;
+ *   - a best-effort PARTIAL index (one final quarantine-only run) if the recovery
+ *     loop cannot converge but at least one file was quarantined;
+ *   - a contained-failure response only if even that cannot produce a clean run.
  * Returns NULL only when the worker could not be spawned at all, so the caller
  * degrades to the in-process path. */
 static char *index_run_supervised(cbm_mcp_server_t *srv, const char *args) {
@@ -3462,6 +3465,7 @@ static char *index_run_supervised(cbm_mcp_server_t *srv, const char *args) {
     }
 
     char *resp = NULL;
+    int quarantined = 0; /* files pinned + added to the quarantine list so far */
     for (int i = 0; i < cap; i++) {
         cbm_index_worker_result_t wr2;
         int rc2 = cbm_index_spawn_worker(args, true, marker_path, quarantine_path, &wr2);
@@ -3474,27 +3478,32 @@ static char *index_run_supervised(cbm_mcp_server_t *srv, const char *args) {
             resp = wr2.response; /* transfer ownership to caller */
             wr2.response = NULL;
             cbm_index_worker_result_free(&wr2);
-            break; /* good files indexed; quarantined files reported as phase=crash */
+            break; /* good files indexed; quarantined files reported as crash/hang */
         }
         if (wr2.outcome == CBM_PROC_CRASH || wr2.outcome == CBM_PROC_HANG) {
             last_outcome = wr2.outcome;
             cbm_index_worker_result_free(&wr2);
-            /* Attribute the crash to the file the marker pinned and quarantine it.
-             * If the marker is empty/unreadable we cannot attribute the crash to a
-             * single file → stop and report a contained failure. */
+            /* crash vs hang: the phase this file is quarantined under and reported
+             * as in skipped[]. A fault signal → "crash"; a no-progress kill →
+             * "hang". */
+            const char *phase = (last_outcome == CBM_PROC_HANG) ? "hang" : "crash";
+            /* Attribute the failure to the file the marker pinned and quarantine it.
+             * If the marker is empty/unreadable we cannot attribute it to a single
+             * file → stop and report a contained failure. */
             char *crasher = supervisor_read_marker(marker_path);
             if (!crasher) {
                 cbm_log_warn("index.supervisor.unattributable", "action", "give_up");
                 break;
             }
-            if (!supervisor_append_quarantine(quarantine_path, crasher)) {
+            if (!supervisor_append_quarantine(quarantine_path, crasher, phase)) {
                 cbm_log_warn("index.supervisor.quarantine_write_fail", "path", crasher);
                 free(crasher);
                 break;
             }
+            quarantined++;
             char attempt_buf[MCP_FIELD_SIZE];
             snprintf(attempt_buf, sizeof(attempt_buf), "%d", i + 1);
-            cbm_log_warn("index.file_quarantined", "path", crasher, "phase", "crash", "attempt",
+            cbm_log_warn("index.file_quarantined", "path", crasher, "outcome", phase, "attempt",
                          attempt_buf);
             free(crasher);
             (void)remove(marker_path); /* fresh marker for the next re-run */
@@ -3507,7 +3516,29 @@ static char *index_run_supervised(cbm_mcp_server_t *srv, const char *args) {
         break;
     }
 
-    (void)remove(marker_path);
+    (void)remove(marker_path); /* marker no longer needed */
+
+    /* Terminal best-effort-partial: the loop exited WITHOUT a clean run (cap
+     * exhausted, or an unattributable failure) but at least one file was already
+     * quarantined. Try ONE final single-threaded spawn with the accumulated
+     * quarantine and NO marker — every known-bad file short-circuits, so a clean
+     * run yields a PARTIAL index (all good files indexed, all known crashers/hangs
+     * reported as skips) rather than a hard failure. Bounded by the same quiet-
+     * timeout, so it cannot itself hang. Rare given monotonic progress. */
+    if (!resp && quarantined > 0) {
+        cbm_index_worker_result_t wrp;
+        int rcp = cbm_index_spawn_worker(args, true, NULL, quarantine_path, &wrp);
+        if (rcp == 0 && wrp.outcome == CBM_PROC_CLEAN && wrp.response) {
+            resp = wrp.response; /* transfer ownership to caller */
+            wrp.response = NULL;
+            char qn[MCP_FIELD_SIZE];
+            snprintf(qn, sizeof(qn), "%d", quarantined);
+            cbm_log_error("index.supervisor.partial", "quarantined", qn, "outcome",
+                          cbm_proc_outcome_str(last_outcome));
+        }
+        cbm_index_worker_result_free(&wrp);
+    }
+
     (void)remove(quarantine_path);
     supervisor_invalidate_store(srv);
 
