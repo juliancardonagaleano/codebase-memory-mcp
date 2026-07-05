@@ -132,6 +132,94 @@ static bool cbm_tail_log(const char *log_file, long *tail_pos, cbm_proc_log_cb c
     return progressed;
 }
 
+/* ── Windows command-line quoting (pure; unit-tested on every platform) ─────── */
+
+/* Append char `c` to buf[cap], reserving the final byte for a NUL terminator.
+ * Sets *ovf on overflow and stops writing; pos keeps advancing so the caller
+ * still detects the overflow after the loop. */
+static size_t cbm_cmdline_put(char *buf, size_t cap, size_t pos, char c, bool *ovf) {
+    if (pos + 1 >= cap) {
+        *ovf = true;
+        return pos;
+    }
+    buf[pos] = c;
+    return pos + 1;
+}
+
+/* Append one argv element to the command line using the Microsoft C runtime
+ * quoting rules (see MS "Parsing C Command-Line Arguments"). CreateProcess takes
+ * a SINGLE string that the child re-parses back into argv, so any element with a
+ * space, tab or double-quote must be wrapped in quotes and its embedded quotes /
+ * preceding backslashes escaped. Without this a JSON argument like
+ * {"repo_path":"C:/r"} loses its inner quotes and the child receives the invalid
+ * {repo_path:C:/r} — the Windows-only index-worker cmdline-quoting bug (the worker exited
+ * non-zero at JSON-arg parse, misattributed to the last-marked file). POSIX is
+ * unaffected: cbm_run_posix passes the argv array straight to execv. */
+static size_t cbm_cmdline_append_arg(char *buf, size_t cap, size_t pos, const char *arg, bool first,
+                                     bool *ovf) {
+    if (!first) {
+        pos = cbm_cmdline_put(buf, cap, pos, ' ', ovf);
+    }
+    pos = cbm_cmdline_put(buf, cap, pos, '"', ovf);
+    for (const char *p = arg; *p;) {
+        size_t nbs = 0;
+        while (*p == '\\') {
+            nbs++;
+            p++;
+        }
+        if (*p == '\0') {
+            /* Trailing backslashes precede the closing quote: double them so the
+             * quote stays a delimiter, not an escaped literal. */
+            for (size_t k = 0; k < nbs * 2; k++) {
+                pos = cbm_cmdline_put(buf, cap, pos, '\\', ovf);
+            }
+            break;
+        }
+        if (*p == '"') {
+            /* N backslashes then a quote -> 2N+1 backslashes then an escaped quote. */
+            for (size_t k = 0; k < nbs * 2 + 1; k++) {
+                pos = cbm_cmdline_put(buf, cap, pos, '\\', ovf);
+            }
+            pos = cbm_cmdline_put(buf, cap, pos, '"', ovf);
+            p++;
+        } else {
+            for (size_t k = 0; k < nbs; k++) {
+                pos = cbm_cmdline_put(buf, cap, pos, '\\', ovf);
+            }
+            pos = cbm_cmdline_put(buf, cap, pos, *p, ovf);
+            p++;
+        }
+    }
+    pos = cbm_cmdline_put(buf, cap, pos, '"', ovf);
+    return pos;
+}
+
+/* Build a full Windows CreateProcess command line from a NULL-terminated argv,
+ * applying the MS C runtime quoting rules so the child re-parses byte-identical
+ * argv. Returns true on success, false if the result would overflow `buf`.
+ *
+ * Defined unconditionally (pure string logic, no Windows headers) so the quoting
+ * contract is unit-tested on Linux/macOS CI too — even though the real spawn path
+ * only runs on Windows. Shared by cbm_run_win AND the UI http_server index spawn
+ * so both escape identically; a naive `"%s"` wrap silently corrupts any argument
+ * containing a quote (e.g. the index JSON {"repo_path":"…"}), corrupting the
+ * spawned child's argv. */
+bool cbm_build_win_cmdline(char *buf, size_t cap, const char *const *argv) {
+    if (!buf || cap == 0 || !argv) {
+        return false;
+    }
+    size_t pos = 0;
+    bool ovf = false;
+    for (int i = 0; argv[i]; i++) {
+        pos = cbm_cmdline_append_arg(buf, cap, pos, argv[i], i == 0, &ovf);
+        if (ovf) {
+            return false;
+        }
+    }
+    buf[pos] = '\0';
+    return true;
+}
+
 #ifdef _WIN32
 
 static int cbm_run_win(const cbm_proc_opts_t *opts, cbm_proc_result_t *out) {
@@ -139,18 +227,12 @@ static int cbm_run_win(const cbm_proc_opts_t *opts, cbm_proc_result_t *out) {
     const char *const default_argv[] = {bin, NULL};
     const char *const *argv = opts->argv ? opts->argv : default_argv;
 
-    /* Build a quoted command line from argv. */
     char cmdline[8192];
-    size_t pos = 0;
-    for (int i = 0; argv[i]; i++) {
-        int n = snprintf(cmdline + pos, sizeof(cmdline) - pos, "%s\"%s\"", (i ? " " : ""), argv[i]);
-        if (n < 0 || (size_t)n >= sizeof(cmdline) - pos) {
-            out->outcome = CBM_PROC_SPAWN_FAILED;
-            out->exit_code = -1;
-            out->term_signal = 0;
-            return -1;
-        }
-        pos += (size_t)n;
+    if (!cbm_build_win_cmdline(cmdline, sizeof(cmdline), argv)) {
+        out->outcome = CBM_PROC_SPAWN_FAILED;
+        out->exit_code = -1;
+        out->term_signal = 0;
+        return -1;
     }
 
     HANDLE hlog = INVALID_HANDLE_VALUE;

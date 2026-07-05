@@ -192,7 +192,10 @@ int cbm_index_spawn_worker(const char *args_json, bool single_thread, const char
     opts.argv = argv;
     opts.log_file = log_path;
     opts.quiet_timeout_ms = worker_quiet_timeout_ms();
-    opts.delete_log_on_exit = true;
+    /* We manage log deletion ourselves after reaping (below): keep it on failure
+     * for post-mortem, delete it only on a clean run. See the observability
+     * note at the reap site. */
+    opts.delete_log_on_exit = false;
 
     cbm_proc_result_t r;
     int run_rc = cbm_subprocess_run(&opts, &r);
@@ -209,6 +212,7 @@ int cbm_index_spawn_worker(const char *args_json, bool single_thread, const char
 
     if (run_rc != 0) {
         (void)remove(resp_path);
+        (void)remove(log_path); /* empty/partial log from a failed spawn — nothing to keep */
         cbm_log_warn("index.supervisor.spawn_failed", "action", "degrade_in_process");
         return -1;
     }
@@ -222,9 +226,25 @@ int cbm_index_spawn_worker(const char *args_json, bool single_thread, const char
     (void)remove(resp_path);
 
     char sig[16];
+    char exit_buf[16];
     snprintf(sig, sizeof(sig), "%d", r.term_signal);
-    cbm_log_info("index.supervisor.reap", "outcome", cbm_proc_outcome_str(r.outcome), "signal",
-                 sig);
+    snprintf(exit_buf, sizeof(exit_buf), "%d", r.exit_code);
+    cbm_log_info("index.supervisor.reap", "outcome", cbm_proc_outcome_str(r.outcome), "exit_code",
+                 exit_buf, "signal", sig);
+
+    /* Observability: on a CLEAN run the worker log is noise → delete it. On
+     * ANY failure keep it and surface its path + raw exit code, so the worker's own
+     * stdout/stderr (pipeline logs, any assert/abort text, the exact exit code) is
+     * available post-mortem instead of vanishing. Previously the log was ALWAYS
+     * deleted and only outcome+signal were logged, so a worker that exited non-zero
+     * left nothing to diagnose — the CI blind spot that hid this bug (a mangled JSON
+     * arg → "repo_path is required" exit) behind a generic "crashed on a file". */
+    if (r.outcome == CBM_PROC_CLEAN) {
+        (void)remove(log_path);
+    } else {
+        cbm_log_warn("index.supervisor.worker_failed", "outcome", cbm_proc_outcome_str(r.outcome),
+                     "exit_code", exit_buf, "log", log_path);
+    }
     return 0;
 }
 

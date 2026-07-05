@@ -21,6 +21,7 @@
 #define CBM_SUBPROCESS_H
 
 #include <stdbool.h>
+#include <stddef.h> /* size_t (cbm_build_win_cmdline) */
 
 /* How a supervised child ended. */
 typedef enum {
@@ -72,5 +73,18 @@ cbm_proc_outcome_t cbm_proc_classify(bool exited_normally, int exit_code, int te
 
 /* Stable lowercase name for an outcome (for structured logs / skip reasons). */
 const char *cbm_proc_outcome_str(cbm_proc_outcome_t o);
+
+/* Build a Windows CreateProcess command line from a NULL-terminated argv, applying
+ * the Microsoft C runtime quoting rules (quote-wrap + escape embedded quotes and
+ * their preceding backslashes) so the spawned child re-parses byte-identical argv.
+ * Returns true on success, false on overflow (buf then holds a truncated string).
+ *
+ * CreateProcess re-parses a SINGLE command string into argv, so a naive `"%s"` wrap
+ * silently corrupts any element containing a double-quote — e.g. the index worker's
+ * JSON arg {"repo_path":"…"} arrives as {repo_path:…}, the Windows index-worker bug.
+ * Exposed (and compiled on every platform — it is pure string logic) so the quoting
+ * is unit-tested on Linux/macOS CI, and so both spawn sites (cbm_subprocess_run and
+ * the UI http_server index spawn) escape through one shared, tested implementation. */
+bool cbm_build_win_cmdline(char *buf, size_t cap, const char *const *argv);
 
 #endif /* CBM_SUBPROCESS_H */

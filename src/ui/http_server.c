@@ -33,6 +33,7 @@
 #include "foundation/compat_fs.h"
 #include "foundation/str_util.h"
 #include "foundation/compat_thread.h"
+#include "foundation/subprocess.h" /* cbm_build_win_cmdline — shared MS-CRT arg quoting */
 
 #include <sqlite3/sqlite3.h>
 #include <yyjson/yyjson.h>
@@ -957,13 +958,20 @@ static void *index_thread_fn(void *arg) {
     snprintf(log_file, sizeof(log_file), "%s\\cbm_index_%d.log",
              getenv("TEMP") ? getenv("TEMP") : ".", (int)_getpid());
 
-    /* Build command line for CreateProcess */
-    char cmdline[2048];
-    /* --index-worker: this http_server spawn is already the crash-isolation layer,
+    /* Build command line for CreateProcess through the shared MS-CRT quoter so the
+     * JSON arg's embedded quotes survive the child's argv re-parse — a naive
+     * `"%s"` wrap dropped them, corrupting {"repo_path":"…"} into {repo_path:…}.
+     * --index-worker: this http_server spawn is already the crash-isolation layer,
      * so the child runs indexing in-process rather than spawning its own supervisor
      * (avoids redundant process nesting). */
-    snprintf(cmdline, sizeof(cmdline), "\"%s\" cli --index-worker index_repository \"%s\"", bin,
-             json_arg);
+    char cmdline[2048];
+    const char *const idx_argv[] = {bin,      "cli", "--index-worker", "index_repository",
+                                    json_arg, NULL};
+    if (!cbm_build_win_cmdline(cmdline, sizeof(cmdline), idx_argv)) {
+        snprintf(job->error_msg, sizeof(job->error_msg), "index command line too long");
+        atomic_store(&job->status, 3);
+        return NULL;
+    }
 
     cbm_log_info("ui.index.spawn", "bin", bin, "log", log_file);
 
