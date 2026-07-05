@@ -15,8 +15,11 @@
 #ifdef _WIN32
 #include "../src/foundation/compat_fs_internal.h"
 #include "../src/foundation/win_utf8.h"
-#include <wchar.h>
+#include <winsock2.h> /* #798 follow-up: listening-socket isolation guard */
+#include <windows.h>
+#include <stdint.h>
 #include <stdlib.h>
+#include <wchar.h>
 #endif
 
 #include <string.h>
@@ -558,6 +561,60 @@ TEST(popen_isolated_propagates_exit_code) {
     PASS();
 }
 
+/* #798 follow-up (the full-repro gap flagged above): prove the EXACT handle class
+ * that deadlocked git — an inheritable AFD/listening-socket handle, the kind the
+ * UI HTTP server holds — does NOT cross into the cbm_popen child. Unlike the
+ * git-version round-trip, this is deterministic on ANY Windows and does not depend
+ * on the MSYS2 git build reproducing the NtQueryObject hang.
+ *
+ * We open a real listening socket, mark it inheritable, then spawn THIS test
+ * binary through cbm_popen (a cmd.exe grandchild — exactly git's spawn shape) in
+ * `__cbm_sockprobe` mode, passing the socket's numeric handle value. The child
+ * reports via exit code whether that handle is a live socket in its address space:
+ *   - isolated spawn (the fix): cmd.exe inherits only {pipe, NUL}, the socket is
+ *     absent, getsockopt fails  → child exit 0  → GREEN.
+ *   - raw _popen (regression): bInheritHandles=TRUE leaks the socket transitively
+ *     through cmd.exe into the child, getsockopt succeeds → child exit 42 → RED.
+ * Verified RED with a local _popen revert, GREEN with the isolated spawn. */
+TEST(popen_isolates_listening_socket) {
+    WSADATA wsa;
+    ASSERT_EQ(WSAStartup(MAKEWORD(2, 2), &wsa), 0);
+
+    SOCKET ls = socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT(ls != INVALID_SOCKET);
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(0x7F000001); /* 127.0.0.1 */
+    addr.sin_port = 0;                         /* ephemeral */
+    ASSERT_EQ(bind(ls, (struct sockaddr *)&addr, sizeof(addr)), 0);
+    ASSERT_EQ(listen(ls, 1), 0);
+    /* Winsock sockets are inheritable by default; make it explicit so a _popen
+     * regression is guaranteed to leak it (and this test to go RED). */
+    ASSERT(SetHandleInformation((HANDLE)ls, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT));
+
+    char self[MAX_PATH];
+    ASSERT(GetModuleFileNameA(NULL, self, sizeof(self)) > 0);
+
+    char cmd[MAX_PATH + 64];
+    snprintf(cmd, sizeof(cmd), "\"%s\" __cbm_sockprobe %llu", self,
+             (unsigned long long)(uintptr_t)ls);
+
+    FILE *fp = cbm_popen(cmd, "r");
+    ASSERT_NOT_NULL(fp);
+    ASSERT_EQ(cbm_popen_last_was_isolated(), 1);
+    char drain[128];
+    while (fgets(drain, sizeof(drain), fp)) {
+        /* the probe writes nothing to stdout, but drain to a clean EOF */
+    }
+    int rc = cbm_pclose(fp);
+    closesocket(ls);
+    WSACleanup();
+
+    ASSERT_EQ(rc, 0); /* 0 = socket isolated from child; 42 = leaked (regression) */
+    PASS();
+}
+
 #endif /* _WIN32 */
 
 /* ══════════════════════════════════════════════════════════════════
@@ -629,5 +686,6 @@ SUITE(security) {
     /* Isolated popen — handle-inheritance regression guard for #798 */
     RUN_TEST(popen_isolated_git_version_round_trip);
     RUN_TEST(popen_isolated_propagates_exit_code);
+    RUN_TEST(popen_isolates_listening_socket);
 #endif
 }

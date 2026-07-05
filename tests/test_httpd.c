@@ -16,6 +16,7 @@
 #include "../src/foundation/log.h"
 #include "../src/foundation/platform.h"
 #include "../src/cli/cli.h"
+#include "../src/git/git_context.h" /* #798 follow-up: live-socket git-resolve repro */
 #include "../src/ui/http_server.h"
 #include "test_framework.h"
 #include "test_helpers.h"
@@ -34,6 +35,7 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h> /* #798 follow-up: CreateThread/WaitForSingleObject watchdog */
 typedef SOCKET th_sock_t;
 #define th_sock_close closesocket
 #define TH_SOCK_BAD INVALID_SOCKET
@@ -41,6 +43,7 @@ typedef SOCKET th_sock_t;
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/time.h> /* struct timeval for the SO_RCVTIMEO watchdog (#798 follow-up) */
 #include <unistd.h>
 typedef int th_sock_t;
 #define th_sock_close close
@@ -962,6 +965,126 @@ TEST(repo_info_strips_credentials_from_remote) {
     PASS();
 }
 
+/* ── #798 follow-up: full UI-mode hang repro (live sockets) ───── */
+
+/* Like th_http but arms a client-side receive-timeout watchdog. If the
+ * single-threaded server wedges, recv() returns instead of blocking forever, so
+ * the test FAILs deterministically rather than hanging CI. 0 on connect/timeout. */
+static int th_http_deadline(int port, const char *request, char *resp, size_t respsz,
+                            int timeout_ms) {
+    th_sock_t s = th_connect(port);
+    if (s == TH_SOCK_BAD)
+        return 0;
+#ifdef _WIN32
+    DWORD tv = (DWORD)timeout_ms;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
+#else
+    struct timeval tv;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
+    if (th_send_all(s, request, strlen(request)) != 0) {
+        th_sock_close(s);
+        return 0;
+    }
+    int n = th_recv_until_close(s, resp, respsz);
+    th_sock_close(s);
+    return n;
+}
+
+/* #798 was a single-threaded-server wedge: list_projects never returned and the
+ * whole UI stopped answering. Assert the running server answers list_projects
+ * within a hard deadline while it holds live listening sockets. The client
+ * receive-timeout is the watchdog: a wedge → no 200 → FAIL, never a CI hang. */
+TEST(ui_server_list_projects_responds_under_watchdog) {
+    th_server_t ts;
+    ASSERT_EQ(th_server_start(&ts), 0);
+    const char *body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\","
+                       "\"params\":{\"name\":\"list_projects\",\"arguments\":{}}}";
+    char req[512];
+    snprintf(req, sizeof(req),
+             "POST /rpc HTTP/1.1\r\n"
+             "Content-Type: application/json\r\n"
+             "Content-Length: %d\r\n\r\n%s",
+             (int)strlen(body), body);
+    char resp[8192];
+    int n = th_http_deadline(cbm_http_server_port(ts.srv), req, resp, sizeof(resp), 15000);
+    th_server_stop(&ts);
+    ASSERT_GT(n, 0); /* a response arrived before the watchdog fired */
+    ASSERT_EQ(th_status(resp), 200);
+    ASSERT_NOT_NULL(strstr(resp, "\"jsonrpc\""));
+    PASS();
+}
+
+#ifdef _WIN32
+typedef struct {
+    char path[512];
+    int resolved_ok;
+} th_gitctx_probe_t;
+
+static DWORD WINAPI th_gitctx_probe_thread(LPVOID arg) {
+    th_gitctx_probe_t *p = (th_gitctx_probe_t *)arg;
+    cbm_git_context_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    int rc = cbm_git_context_resolve(p->path, &ctx);
+    p->resolved_ok = (rc == 0 && ctx.is_git) ? 1 : 0;
+    cbm_git_context_free(&ctx);
+    return 0;
+}
+#endif
+
+/* The load-bearing end-to-end repro of #798: while the single-threaded UI server
+ * holds LIVE listening/AFD socket handles in this process, cbm_git_context_resolve
+ * — the exact path list_projects runs (add_git_context_json → resolve →
+ * cbm_popen(git)) — must not hang. Under a raw-_popen regression git inherits
+ * those sockets and its MSYS2 runtime deadlocks in NtQueryObject; the watchdog
+ * turns that into a hard FAIL instead of an infinite hang. */
+TEST(git_context_resolve_no_hang_under_live_ui_sockets) {
+#ifndef _WIN32
+    SKIP_PLATFORM("Windows-only: #798 UI listening-socket handle inheritance");
+#else
+    char *tmp = th_mktempdir("cbm_798repro");
+    if (!tmp)
+        FAIL("th_mktempdir returned NULL");
+
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+             "git -C \"%s\" init -q && git -C \"%s\" -c user.email=t@t -c user.name=t "
+             "commit -q --allow-empty -m init",
+             tmp, tmp);
+    if (system(cmd) != 0) {
+        th_rmtree(tmp);
+        SKIP_PLATFORM("git not available to init a repo");
+    }
+
+    th_server_t ts;
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    th_gitctx_probe_t *probe = (th_gitctx_probe_t *)calloc(1, sizeof(*probe));
+    ASSERT_NOT_NULL(probe);
+    snprintf(probe->path, sizeof(probe->path), "%s", tmp);
+
+    HANDLE h = CreateThread(NULL, 0, th_gitctx_probe_thread, probe, 0, NULL);
+    ASSERT_NOT_NULL(h);
+    DWORD w = WaitForSingleObject(h, 30000);
+    if (w != WAIT_OBJECT_0) {
+        /* Wedged on the inherited-socket NtQueryObject walk. Deliberately leak
+         * the heap probe + thread (a late wake must not touch freed memory);
+         * process exit reaps them. Fail loudly rather than hang CI. */
+        th_server_stop(&ts);
+        FAIL("cbm_git_context_resolve hung under live UI sockets (#798 regression)");
+    }
+    CloseHandle(h);
+    th_server_stop(&ts);
+    int ok = probe->resolved_ok;
+    free(probe);
+    th_rmtree(tmp);
+    ASSERT_EQ(ok, 1);
+    PASS();
+#endif
+}
+
 /* ── Suite ────────────────────────────────────────────────────── */
 
 SUITE(httpd) {
@@ -1010,4 +1133,7 @@ SUITE(httpd) {
     RUN_TEST(ui_server_slow_request_hits_deadline);
     RUN_TEST(ui_server_access_log_redacts_query);
     RUN_TEST(ui_server_stop_joins_cleanly);
+    /* #798 follow-up: full UI-mode hang repro under live sockets */
+    RUN_TEST(ui_server_list_projects_responds_under_watchdog);
+    RUN_TEST(git_context_resolve_no_hang_under_live_ui_sockets);
 }

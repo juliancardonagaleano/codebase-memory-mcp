@@ -16,9 +16,13 @@ int tf_skip_count = 0;
 #include "mcp/mcp.h"              /* cbm_mcp_handle_tool — act as a real worker */
 #include <sqlite3.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <winsock2.h> /* #798 follow-up: socket-isolation re-exec probe */
+#endif
 
 /* #832 guard support: when the index supervisor spawns THIS binary as
  * `<self> cli --index-worker index_repository <args_json> --response-out <file>`
@@ -75,6 +79,38 @@ static int tf_maybe_run_index_worker(int argc, char **argv) {
     }
     cbm_mcp_server_free(srv);
     return 0;
+}
+
+/* #798 follow-up: socket-isolation probe. The parent test
+ * (popen_isolates_listening_socket, test_security.c) spawns THIS binary through
+ * cbm_popen — the same cmd.exe-grandchild path git takes — passing the numeric
+ * value of an inheritable listening-socket handle. If cbm_popen correctly
+ * isolates handles, that socket is NOT present in this child and getsockopt
+ * fails; a regression to raw _popen leaks it (bInheritHandles=TRUE propagates it
+ * transitively through cmd.exe) and getsockopt succeeds. We report via exit code
+ * so the verdict survives `cmd.exe /c` (proven by popen_isolated_propagates_exit_code).
+ * Returns an exit code (>=0) when it handled a probe invocation, else -1. */
+static int tf_maybe_run_socket_probe(int argc, char **argv) {
+#ifdef _WIN32
+    if (argc < 3 || strcmp(argv[1], "__cbm_sockprobe") != 0) {
+        return -1;
+    }
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+        return 0; /* no winsock in child ⇒ cannot observe a socket ⇒ not leaked */
+    }
+    unsigned long long hv = strtoull(argv[2], NULL, 10);
+    SOCKET s = (SOCKET)(uintptr_t)hv;
+    int type = 0;
+    int len = (int)sizeof(type);
+    int rc = getsockopt(s, SOL_SOCKET, SO_TYPE, (char *)&type, &len);
+    /* rc==0 ⇒ the handle is a live socket in THIS child ⇒ it was inherited. */
+    return rc == 0 ? 42 : 0;
+#else
+    (void)argc;
+    (void)argv;
+    return -1;
+#endif
 }
 
 static int g_suite_argc = 0;
@@ -201,6 +237,13 @@ extern void suite_dump_verify_io(void);
 extern void cbm_kind_in_set_free_cache(void);
 
 int main(int argc, char **argv) {
+    /* #798 follow-up: if spawned as the socket-isolation probe, report whether an
+     * inheritable socket handle crossed into this child and exit before any suite. */
+    int probe_rc = tf_maybe_run_socket_probe(argc, argv);
+    if (probe_rc >= 0) {
+        return probe_rc;
+    }
+
     /* #832: if spawned as a supervised index worker, do the real work and exit
      * before any suite runs (see tf_maybe_run_index_worker). */
     int worker_rc = tf_maybe_run_index_worker(argc, argv);
