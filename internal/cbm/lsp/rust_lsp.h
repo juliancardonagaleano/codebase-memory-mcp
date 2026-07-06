@@ -28,6 +28,7 @@
 #include "scope.h"
 #include "type_registry.h"
 #include "../cbm.h"
+#include "go_lsp.h" // for CBMLSPDef (pipeline def), used by the Tier-2 builder
 
 /* Forward declaration — defined in rust_cargo.h. We keep it forward
  * here to avoid pulling rust_cargo.h into every consumer that only
@@ -295,6 +296,22 @@ void cbm_run_rust_lsp_cross_with_manifest(CBMArena *arena, const char *source, i
                                           int import_count, TSTree *cached_tree,
                                           const struct CBMCargoManifest *manifest,
                                           CBMResolvedCallArray *out);
+
+/* Tier-2: build the project-wide Rust cross registry ONCE from all defs, finalize,
+ * and seal read-only. Shared across every Rust file's resolve (mirrors C/py/cs/ts).
+ * Def-driven → byte-identical entries to the per-file build. */
+CBMTypeRegistry *cbm_rust_build_cross_registry(CBMArena *arena, CBMLSPDef *defs, int def_count);
+
+/* Cross-file Rust resolve using a pre-built shared registry (Tier-2). Skips the
+ * per-file registry build; just parse + resolve. `manifest` = the same Cargo manifest
+ * the per-file path uses (cross-crate #56). `result` may be NULL (the cross path does
+ * not synthesise proc-macro edges). Mirrors cbm_run_c_lsp_cross_with_registry. */
+void cbm_run_rust_lsp_cross_with_registry(CBMArena *arena, const char *source, int source_len,
+                                          const char *module_qn, const CBMTypeRegistry *reg,
+                                          const char **import_names, const char **import_qns,
+                                          int import_count, TSTree *cached_tree,
+                                          const struct CBMCargoManifest *manifest,
+                                          CBMResolvedCallArray *out, CBMFileResult *result);
 
 /* Per-file input for batch cross-file Rust LSP processing. */
 typedef struct {

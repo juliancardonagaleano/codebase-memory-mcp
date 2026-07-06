@@ -492,6 +492,10 @@ void cbm_pxc_set_rust_manifest(const CBMCargoManifest *m) {
     g_pxc_rust_manifest = m;
 }
 
+const struct CBMCargoManifest *cbm_pxc_get_rust_manifest(void) {
+    return g_pxc_rust_manifest;
+}
+
 /* Convert a CBMLSPDef array (the pipeline's lingua franca, go_lsp.h:73)
  * into a CBMRustLSPDef array (rust_lsp.h) inside `arena`. The two structs
  * share their first 9 string fields; CBMRustLSPDef adds `trait_qn` before

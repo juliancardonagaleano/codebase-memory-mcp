@@ -2738,6 +2738,36 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
                             result->cached_tree, &result->resolved_calls);
                         used_prebuilt = true;
                         break;
+                    case CBM_LANG_RUST: {
+                        /* Byte-identity-preserving Tier-2. The rust per-file build uses
+                         * all_defs ONLY when the filter returns NULL (the ~90s amplifier
+                         * files, e.g. rust kernel modules); those share the once-built all_defs
+                         * registry. Files that filter to a SUBSET (the majority) resolve
+                         * against that subset today, so they keep their per-file build —
+                         * feeding them the shared all_defs registry would be a SUPERSET and
+                         * could change the graph. (See report cc799e17.) Both paths read the
+                         * same worker-thread manifest as the fallback. */
+                        CBMLSPDef *r_filtered = NULL;
+                        int r_fc = 0;
+                        if (rc->module_def_index) {
+                            r_filtered = cbm_pxc_filter_defs_for_file(
+                                rc->module_def_index, rc->all_defs, lang, result->namespace_name,
+                                def_module, imp_vals, imp_count, &r_fc);
+                        }
+                        if (!r_filtered) {
+                            cbm_run_rust_lsp_cross_with_registry(
+                                &result->arena, lsp_source, lsp_source_len, def_module, prebuilt,
+                                imp_keys, imp_vals, imp_count, result->cached_tree,
+                                cbm_pxc_get_rust_manifest(), &result->resolved_calls,
+                                /*result=*/NULL);
+                        } else {
+                            cbm_pxc_run_one(lang, result, lsp_source, lsp_source_len, def_module,
+                                            r_filtered, r_fc, imp_keys, imp_vals, imp_count);
+                            free(r_filtered);
+                        }
+                        used_prebuilt = true;
+                        break;
+                    }
                     case CBM_LANG_CSHARP:
                         cbm_run_cs_lsp_cross_with_registry(
                             &result->arena, lsp_source, lsp_source_len, def_module, prebuilt,
