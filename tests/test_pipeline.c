@@ -6577,9 +6577,16 @@ TEST(pipeline_backpressure_futile_nap_disengages) {
         fclose(f);
     }
 
-    /* 1 MB budget: over-budget on every pull, unreclaimable by napping. */
-    cbm_setenv("CBM_MEM_BUDGET_MB", "1", 1);
-    cbm_mem_init(0);
+    /* 1 MB budget: over-budget on every pull, unreclaimable by napping.
+     * Set via the test hook, NOT setenv + cbm_mem_init: the init-once guard
+     * makes any re-init keep whatever budget the FIRST in-process init
+     * computed. The old env dance either failed to apply the 1 MB budget
+     * (some earlier test's init won the guard) or applied it permanently
+     * (this test's init won) — the "restore" re-init was then a silent
+     * no-op and the 1 MB budget leaked into every later budget consumer
+     * in the runner (mem_over_budget_low_rss went red suite-order-wide). */
+    size_t saved_budget = cbm_mem_budget();
+    cbm_mem_set_budget_for_tests((size_t)1024 * 1024);
     ASSERT_TRUE(cbm_mem_budget() > 0);
     ASSERT_TRUE(cbm_mem_over_budget());
 
@@ -6589,9 +6596,8 @@ TEST(pipeline_backpressure_futile_nap_disengages) {
     int rc = cbm_pipeline_run(p);
     long cycles = cbm_pp_bp_nap_cycles();
 
-    /* Restore the tests' default budget-off state BEFORE asserting. */
-    cbm_unsetenv("CBM_MEM_BUDGET_MB");
-    cbm_mem_init(0);
+    /* Restore the caller-visible budget BEFORE asserting. */
+    cbm_mem_set_budget_for_tests(saved_budget);
     cbm_pipeline_free(p);
     teardown_test_repo();
 

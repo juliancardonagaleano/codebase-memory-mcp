@@ -29,6 +29,15 @@ size_t cbm_mem_peak_rss(void);
 /* Total budget in bytes. */
 size_t cbm_mem_budget(void);
 
+/* TEST HOOK: overwrite the budget directly, bypassing cbm_mem_init's
+ * init-once guard (a setenv+re-init dance in tests is a silent no-op once
+ * some earlier init won the guard — the poisoned budget then leaks into
+ * every later budget consumer in the process). Does NOT flip the init
+ * guard: a later cbm_mem_init still initializes normally. Callers must
+ * save cbm_mem_budget() first and restore it before their assertions.
+ * Never call from production code. */
+void cbm_mem_set_budget_for_tests(size_t bytes);
+
 /* Returns true if current RSS exceeds the budget. */
 bool cbm_mem_over_budget(void);
 

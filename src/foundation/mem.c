@@ -234,6 +234,10 @@ size_t cbm_mem_budget(void) {
     return g_budget;
 }
 
+void cbm_mem_set_budget_for_tests(size_t bytes) {
+    g_budget = bytes;
+}
+
 bool cbm_mem_over_budget(void) {
     size_t rss = cbm_mem_rss();
     check_pressure(rss);
