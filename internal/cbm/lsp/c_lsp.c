@@ -5455,7 +5455,8 @@ CBMTypeRegistry *cbm_c_build_cross_registry(CBMArena *arena, CBMLSPDef *defs, in
     cbm_cpp_stdlib_register(reg, arena);
     for (int i = 0; i < def_count; i++) {
         CBMLSPDef *d = &defs[i];
-        if (d->lang != CBM_LANG_C && d->lang != CBM_LANG_CPP && d->lang != CBM_LANG_CUDA) {
+        if (d->lang != CBM_LANG_C && d->lang != CBM_LANG_CPP && d->lang != CBM_LANG_CUDA &&
+            d->lang != CBM_LANG_MQL5) {
             continue;
         }
         c_register_lsp_defs(arena, reg, "", d, 1);

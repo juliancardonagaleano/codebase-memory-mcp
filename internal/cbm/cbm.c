@@ -1032,7 +1032,8 @@ static CBMFileResult *cbm_extract_file_impl(const char *source, int source_len,
         if (language == CBM_LANG_GO) {
             cbm_run_go_lsp(a, result, source, source_len, root);
         }
-        if (language == CBM_LANG_C || language == CBM_LANG_CPP || language == CBM_LANG_CUDA) {
+        if (language == CBM_LANG_C || language == CBM_LANG_CPP || language == CBM_LANG_CUDA ||
+            language == CBM_LANG_MQL5) {
             cbm_run_c_lsp(a, result, source, source_len, root, language != CBM_LANG_C);
         }
         if (language == CBM_LANG_PHP) {
@@ -1086,7 +1087,8 @@ static CBMFileResult *cbm_extract_file_impl(const char *source, int source_len,
 
     // Second pass: preprocess C/C++/CUDA and extract additional macro-hidden calls.
     // Defs keep original-source line numbers; only CALLS are extracted from expanded source.
-    if (language == CBM_LANG_C || language == CBM_LANG_CPP || language == CBM_LANG_CUDA) {
+    if (language == CBM_LANG_C || language == CBM_LANG_CPP || language == CBM_LANG_CUDA ||
+        language == CBM_LANG_MQL5) {
         uint64_t pp_start = now_ns();
         char *expanded = cbm_preprocess(source, source_len, rel_path, extra_defines, include_paths,
                                         language != CBM_LANG_C);

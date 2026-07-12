@@ -402,7 +402,8 @@ static const char *compute_func_qn(CBMExtractCtx *ctx, TSNode node, const CBMLan
      * "proj.file.bar" that no node carries (#554/#621). The out-of-line def is at
      * file scope, so enclosing_class_qn is NULL — derive the class from the
      * qualified declarator instead. */
-    if ((ctx->language == CBM_LANG_CPP || ctx->language == CBM_LANG_CUDA) &&
+    if ((ctx->language == CBM_LANG_CPP || ctx->language == CBM_LANG_CUDA ||
+         ctx->language == CBM_LANG_MQL5) &&
         strcmp(ts_node_type(node), "function_definition") == 0) {
         char *scope_name = cbm_cpp_out_of_line_parent_class(ctx->arena, node, ctx->source);
         if (scope_name && scope_name[0]) {

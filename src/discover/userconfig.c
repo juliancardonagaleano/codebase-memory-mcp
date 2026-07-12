@@ -119,6 +119,7 @@ static const lang_name_entry_t LANG_NAME_TABLE[] = {
     {"ini", CBM_LANG_INI},
     {"matlab", CBM_LANG_MATLAB},
     {"mojo", CBM_LANG_MOJO},
+    {"mql5", CBM_LANG_MQL5},
     {"lean", CBM_LANG_LEAN},
     {"form", CBM_LANG_FORM},
     {"magma", CBM_LANG_MAGMA},

@@ -190,6 +190,10 @@ static const ext_entry_t EXT_TABLE[] = {
     /* Mojo */
     {".mojo", CBM_LANG_MOJO},
 
+    /* MQL5 (MetaQuotes Language 5) */
+    {".mq5", CBM_LANG_MQL5},  /* MQL5 scripts, experts, indicators */
+    {".mqh", CBM_LANG_MQL5},  /* MQL5 include headers */
+
     /* Nix */
     {".nix", CBM_LANG_NIX},
 
@@ -839,6 +843,7 @@ static const char *LANG_NAMES[CBM_LANG_COUNT] = {
     [CBM_LANG_SOQL] = "SOQL",
     [CBM_LANG_SOSL] = "SOSL",
     [CBM_LANG_MOJO] = "Mojo",
+    [CBM_LANG_MQL5] = "MQL5",
 
 };
 

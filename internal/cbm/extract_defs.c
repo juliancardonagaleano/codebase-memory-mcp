@@ -587,7 +587,7 @@ static bool is_cpp_template_inner_kind(const char *kind) {
 // C++/CUDA: find inner function/declaration inside template_declaration.
 // Returns the inner node (not the resolved name) to break the recursive cycle.
 static TSNode find_cpp_template_inner_node(TSNode node, CBMLanguage lang) {
-    if ((lang != CBM_LANG_CPP && lang != CBM_LANG_CUDA) ||
+    if ((lang != CBM_LANG_CPP && lang != CBM_LANG_CUDA && lang != CBM_LANG_MQL5) ||
         strcmp(ts_node_type(node), "template_declaration") != 0) {
         return node;
     }
@@ -643,7 +643,7 @@ static TSNode resolve_toplevel_arrow_name(TSNode node, const char *kind) {
 
 // Try C/C++/CUDA/GLSL function_definition declarator name or template unwrap.
 static TSNode resolve_func_name_c_family(TSNode *node_ptr, CBMLanguage lang, const char *kind) {
-    if ((lang == CBM_LANG_CPP || lang == CBM_LANG_CUDA) &&
+    if ((lang == CBM_LANG_CPP || lang == CBM_LANG_CUDA || lang == CBM_LANG_MQL5) &&
         strcmp(kind, "template_declaration") == 0) {
         TSNode inner = find_cpp_template_inner_node(*node_ptr, lang);
         if (!ts_node_is_null(inner)) {
@@ -653,8 +653,8 @@ static TSNode resolve_func_name_c_family(TSNode *node_ptr, CBMLanguage lang, con
         return null_node;
     }
     if ((lang == CBM_LANG_C || lang == CBM_LANG_CPP || lang == CBM_LANG_CUDA ||
-         lang == CBM_LANG_GLSL || lang == CBM_LANG_HLSL || lang == CBM_LANG_ISPC ||
-         lang == CBM_LANG_SLANG || lang == CBM_LANG_OBJC) &&
+         lang == CBM_LANG_MQL5 || lang == CBM_LANG_GLSL || lang == CBM_LANG_HLSL ||
+         lang == CBM_LANG_ISPC || lang == CBM_LANG_SLANG || lang == CBM_LANG_OBJC) &&
         strcmp(kind, "function_definition") == 0) {
         /* Objective-C top-level C functions (`static int helper(int x) {...}`)
          * have the same declarator structure as C — without this they get no
@@ -5816,7 +5816,7 @@ static void push_nested_class_nodes(TSNode body, const CBMLangSpec *spec, wd_sta
 
 // Check if a C++/CUDA template_declaration wraps a class/struct/union (not a function).
 static bool is_template_class_node(TSNode node, CBMLanguage lang) {
-    if ((lang != CBM_LANG_CPP && lang != CBM_LANG_CUDA) ||
+    if ((lang != CBM_LANG_CPP && lang != CBM_LANG_CUDA && lang != CBM_LANG_MQL5) ||
         strcmp(ts_node_type(node), "template_declaration") != 0) {
         return false;
     }
@@ -5840,7 +5840,7 @@ static bool is_template_class_node(TSNode node, CBMLanguage lang) {
  * its members. C#/PHP need the same treatment paired with their LSP resolvers
  * (a def-only change breaks their existing namespace handling), done separately. */
 static bool is_namespace_scope_kind(CBMLanguage lang, const char *kind) {
-    if (lang == CBM_LANG_CPP || lang == CBM_LANG_CUDA) {
+    if (lang == CBM_LANG_CPP || lang == CBM_LANG_CUDA || lang == CBM_LANG_MQL5) {
         return strcmp(kind, "namespace_definition") == 0;
     }
     return false;
@@ -6047,7 +6047,8 @@ static void extract_janet_def(CBMExtractCtx *ctx, TSNode node) {
 // Languages that use the C preprocessor and therefore have #define macros.
 static bool is_c_preprocessor_lang(CBMLanguage lang) {
     return lang == CBM_LANG_C || lang == CBM_LANG_CPP || lang == CBM_LANG_CUDA ||
-           lang == CBM_LANG_GLSL || lang == CBM_LANG_OBJC || lang == CBM_LANG_ISPC;
+           lang == CBM_LANG_MQL5 || lang == CBM_LANG_GLSL || lang == CBM_LANG_OBJC ||
+           lang == CBM_LANG_ISPC;
 }
 
 // C/C++ preprocessor macros become Macro nodes (#375):
