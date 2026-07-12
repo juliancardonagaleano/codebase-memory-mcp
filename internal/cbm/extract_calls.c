@@ -1962,7 +1962,8 @@ void handle_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, Walk
         extract_kotlin_desugared_calls(ctx, node, ts_node_type(node), state->enclosing_func_qn);
     }
 
-    if (ctx->language == CBM_LANG_CPP || ctx->language == CBM_LANG_CUDA) {
+    if (ctx->language == CBM_LANG_CPP || ctx->language == CBM_LANG_CUDA ||
+        ctx->language == CBM_LANG_MQL5) {
         extract_cpp_operator_call(ctx, node, ts_node_type(node), state->enclosing_func_qn);
         extract_cpp_implicit_calls(ctx, node, ts_node_type(node), state->enclosing_func_qn);
     }

@@ -506,6 +506,46 @@ TEST(repro_grammar_misc_pine) {
     return misc_pipeline_battery("PINE", "ind.pine", src);
 }
 
+/* ── MQL5 (callable) ──────────────────────────────────────────────────────────
+ * Idiomatic MQL5 Expert Advisor: free function `OnInit` (event handler) and
+ * class `CBot` with method `Run` that calls `PlaceOrder`. mql5_func_types =
+ * {"function_definition", "declaration", "template_declaration", "field_declaration",
+ *  "lambda_expression"} -> "Function"; mql5_class_types = {"class_specifier", ...}
+ *  -> "Class".
+ *
+ * Dims asserted: 1-8 + R.
+ * Dim 5 expected GREEN: "Function" for OnInit/Run/PlaceOrder, "Class" for CBot.
+ * Dim 6 expected GREEN: call to PlaceOrder inside Run.
+ * Dim 7 expected GREEN: enclosing-func walk resolves the call to Run's body.
+ * Dim 8 expected GREEN: no dangling CALLS endpoints.
+ */
+TEST(repro_grammar_misc_mql5) {
+    static const char src[] =
+        "int OnInit()\n"
+        "{\n"
+        "   Print(\"init\");\n"
+        "   return INIT_SUCCEEDED;\n"
+        "}\n"
+        "\n"
+        "void PlaceOrder(double price) {}\n"
+        "\n"
+        "class CBot\n"
+        "{\n"
+        "public:\n"
+        "   void Run()\n"
+        "   {\n"
+        "      PlaceOrder(1.10);\n"
+        "   }\n"
+        "};\n";
+    static const char bad[] = "int OnInit()\n{\n   PlaceOrder(";
+    if (misc_single_file_battery("MQL5", src, CBM_LANG_MQL5, "Expert.mq5",
+                                 "Function", NULL, "OnInit") != 0)
+        return 1;
+    if (misc_robustness("MQL5", bad, CBM_LANG_MQL5, "Expert.mq5") != 0)
+        return 1;
+    return misc_pipeline_battery("MQL5", "Expert.mq5", src);
+}
+
 /* ── RESCRIPT (callable) ─────────────────────────────────────────────────────
  * Idiomatic ReScript module: a let-bound function `add` and a let-bound function
  * `compute` that calls `add` inside its body. rescript_func_types = {"function"}
@@ -791,6 +831,7 @@ SUITE(repro_grammar_misc) {
     RUN_TEST(repro_grammar_misc_cfscript);
     RUN_TEST(repro_grammar_misc_linkerscript);
     RUN_TEST(repro_grammar_misc_pine);
+    RUN_TEST(repro_grammar_misc_mql5);
     RUN_TEST(repro_grammar_misc_rescript);
     RUN_TEST(repro_grammar_misc_sql);
     RUN_TEST(repro_grammar_misc_squirrel);

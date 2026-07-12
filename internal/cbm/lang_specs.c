@@ -165,6 +165,7 @@ extern const TSLanguage *tree_sitter_soql(void);
 extern const TSLanguage *tree_sitter_sosl(void);
 extern const TSLanguage *tree_sitter_pine(void);
 extern const TSLanguage *tree_sitter_mojo(void);
+extern const TSLanguage *tree_sitter_mql5(void);
 
 // -- Empty sentinel --
 static const char *empty_types[] = {NULL};
@@ -1597,6 +1598,29 @@ static const char *pine_var_types[] = {"variable_definition_statement",
 static const char *pine_branch_types[] = {"if_statement",     "switch_statement", "for_statement",
                                           "for_in_statement", "while_statement",  NULL};
 static const char *pine_assign_types[] = {"reassignment_statement", NULL};
+
+// ==================== MQL5 (MetaQuotes Language 5) ====================
+// Grammar extends tree-sitter-cpp (MQL5 is C++ with trading extensions:
+// OnInit/OnTick/OnTrade event handlers, indicator buffers, OrderSend, etc.).
+// Node names verified against MichalBPL/tree-sitter-mql5 grammar.js @ 2369df7.
+static const char *mql5_func_types[] = {"function_definition", "declaration", "template_declaration",
+                                        "field_declaration", "lambda_expression", NULL};
+static const char *mql5_class_types[] = {"class_specifier", "struct_specifier", "union_specifier",
+                                         "enum_specifier", "type_definition", NULL};
+static const char *mql5_field_types[] = {"field_declaration", NULL};
+static const char *mql5_module_types[] = {"translation_unit", "namespace_definition",
+                                         "linkage_specification", "declaration", NULL};
+static const char *mql5_call_types[] = {
+    "call_expression",     "field_expression",       "subscript_expression",
+    "new_expression",      "delete_expression",     "binary_expression",
+    "unary_expression",    "update_expression",      NULL};
+static const char *mql5_import_types[] = {"preproc_include", "template_function", "declaration", NULL};
+static const char *mql5_branch_types[] = {"if_statement",    "for_statement",    "for_range_loop",
+                                         "while_statement", "do_statement",     "switch_statement",
+                                         "case_statement",  "try_statement",    "catch_clause", NULL};
+static const char *mql5_var_types[] = {"declaration", "init_declarator", NULL};
+static const char *mql5_assign_types[] = {"assignment_expression", NULL};
+static const char *mql5_throw_types[] = {"throw_statement", NULL};
 static const char *mojo_func_types[] = {"function_definition", NULL};
 static const char *mojo_class_types[] = {"class_definition", "trait_definition", NULL};
 static const char *mojo_module_types[] = {"module", NULL};
@@ -2592,6 +2616,12 @@ static const CBMLangSpec lang_specs[CBM_LANG_COUNT] = {
                        mojo_module_types, mojo_call_types, mojo_import_types, mojo_import_types,
                        mojo_branch_types, mojo_var_types, mojo_assign_types, empty_types, NULL,
                        empty_types, NULL, NULL, tree_sitter_mojo, NULL},
+
+    // CBM_LANG_MQL5
+    [CBM_LANG_MQL5] = {CBM_LANG_MQL5, mql5_func_types, mql5_class_types, mql5_field_types,
+                       mql5_module_types, mql5_call_types, mql5_import_types, empty_types,
+                       mql5_branch_types, mql5_var_types, mql5_assign_types, mql5_throw_types,
+                       NULL, empty_types, NULL, NULL, tree_sitter_mql5, NULL},
 
 };
 

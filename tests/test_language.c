@@ -961,6 +961,12 @@ TEST(lang_ext_mojo) {
     PASS();
 }
 
+TEST(lang_ext_mql5) {
+    ASSERT_EQ(cbm_language_for_extension(".mq5"), CBM_LANG_MQL5);
+    ASSERT_EQ(cbm_language_for_extension(".mqh"), CBM_LANG_MQL5);
+    PASS();
+}
+
 TEST(lang_ext_squirrel) {
     ASSERT_EQ(cbm_language_for_extension(".nut"), CBM_LANG_SQUIRREL);
     PASS();
@@ -1277,6 +1283,7 @@ SUITE(language) {
     RUN_TEST(lang_ext_cairo);
     RUN_TEST(lang_ext_move);
     RUN_TEST(lang_ext_mojo);
+    RUN_TEST(lang_ext_mql5);
     RUN_TEST(lang_ext_squirrel);
     RUN_TEST(lang_ext_func);
     RUN_TEST(lang_ext_rst);
